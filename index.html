@@ -39,13 +39,13 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 16px 0 8px;
+    padding: 12px 0 4px;
     flex-shrink: 0;
   }
 
   .header img.miner-logo {
-    width: 72px;
-    height: 72px;
+    width: 56px;
+    height: 56px;
     object-fit: contain;
     margin-bottom: 4px;
   }
@@ -70,12 +70,13 @@
 
   .status-area {
     flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     width: 100%;
-    padding: 12px 20px;
+    padding: 4px 20px;
     transition: background 0.3s ease;
     position: relative;
   }
@@ -85,6 +86,7 @@
   .status-area.state-timing { background: var(--miners-red-dark); }
   .status-area.state-buzzing { background: var(--miners-red); animation: buzz-flash 0.15s infinite alternate; }
   .status-area.state-resetting { background: var(--miners-gray); }
+  .status-area.state-waiting { background: var(--miners-gray); }
 
   @keyframes buzz-flash {
     from { background: var(--miners-red); }
@@ -97,11 +99,11 @@
     letter-spacing: 3px;
     text-transform: uppercase;
     opacity: 0.85;
-    margin-bottom: 8px;
+    margin-bottom: 4px;
   }
 
   .countdown-display {
-    font-size: 120px;
+    font-size: 80px;
     font-weight: 900;
     line-height: 1;
     font-variant-numeric: tabular-nums;
@@ -119,7 +121,7 @@
     height: 6px;
     background: rgba(255,255,255,0.15);
     border-radius: 3px;
-    margin-top: 16px;
+    margin-top: 8px;
     overflow: visible;
     position: relative;
   }
@@ -147,12 +149,36 @@
     font-weight: 600;
     color: var(--miners-gold);
     letter-spacing: 1px;
+    margin-top: 4px;
+  }
+
+  .go-button {
+    width: 180px;
+    height: 180px;
+    border-radius: 50%;
+    border: 4px solid var(--miners-gold);
+    background: var(--miners-red);
+    color: var(--miners-white);
+    font-size: 48px;
+    font-weight: 900;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
     margin-top: 12px;
+    transition: transform 0.1s ease;
+    box-shadow: 0 4px 20px rgba(196, 30, 42, 0.4);
+    display: none;
+  }
+
+  .go-button:active {
+    transform: scale(0.93);
+    background: var(--miners-red-dark);
   }
 
   .controls {
     width: 100%;
-    padding: 12px 24px 8px;
+    padding: 8px 24px 4px;
     flex-shrink: 0;
   }
 
@@ -160,7 +186,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 12px;
+    margin-bottom: 8px;
   }
 
   .control-label {
@@ -179,8 +205,8 @@
   }
 
   .timer-stepper button {
-    width: 40px;
-    height: 40px;
+    width: 36px;
+    height: 36px;
     border-radius: 50%;
     border: 2px solid var(--miners-gold);
     background: transparent;
@@ -202,7 +228,7 @@
   .timer-value {
     font-size: 24px;
     font-weight: 800;
-    min-width: 60px;
+    min-width: 64px;
     text-align: center;
     color: var(--miners-white);
   }
@@ -230,14 +256,14 @@
   }
 
   .main-button-area {
-    padding: 0 24px 12px;
+    padding: 0 24px 6px;
     width: 100%;
     flex-shrink: 0;
   }
 
   .main-button {
     width: 100%;
-    padding: 18px;
+    padding: 14px;
     border-radius: 14px;
     border: none;
     font-size: 20px;
@@ -264,7 +290,7 @@
   }
 
   .footer {
-    padding: 8px 0 max(8px, env(safe-area-inset-bottom));
+    padding: 4px 0 max(4px, env(safe-area-inset-bottom));
     flex-shrink: 0;
   }
 
@@ -319,16 +345,32 @@
     <div class="mic-level-fill" id="micLevelFill"></div>
     <div class="mic-threshold-line" id="micThresholdLine"></div>
   </div>
+  <button class="go-button" id="goButton">GO</button>
   <div class="reps-display" id="repsDisplay"></div>
 </div>
 
 <div class="controls" id="controls">
+  <div class="control-row">
+    <span class="control-label">Mode</span>
+    <select class="sound-select" id="modeSelect">
+      <option value="listen">Listen</option>
+      <option value="manual">Manual</option>
+    </select>
+  </div>
   <div class="control-row">
     <span class="control-label">Timer</span>
     <div class="timer-stepper">
       <button id="timerDown" aria-label="Decrease timer">-</button>
       <span class="timer-value" id="timerValue">4.0s</span>
       <button id="timerUp" aria-label="Increase timer">+</button>
+    </div>
+  </div>
+  <div class="control-row">
+    <span class="control-label">Buzz</span>
+    <div class="timer-stepper">
+      <button id="buzzDown" aria-label="Decrease buzz duration">-</button>
+      <span class="timer-value" id="buzzValue">0.75s</span>
+      <button id="buzzUp" aria-label="Increase buzz duration">+</button>
     </div>
   </div>
   <div class="control-row">
@@ -342,7 +384,14 @@
       <option value="triplebeep">Triple Beep</option>
     </select>
   </div>
-  <div class="control-row">
+  <div class="control-row" id="detectModeRow">
+    <span class="control-label">Detect</span>
+    <select class="sound-select" id="detectModeSelect">
+      <option value="all">All Sound</option>
+      <option value="batcrack">Bat Crack</option>
+    </select>
+  </div>
+  <div class="control-row" id="sensitivityRow">
     <span class="control-label">Sensitivity</span>
     <div style="flex:1;display:flex;align-items:center;margin-left:12px;gap:6px;">
       <span style="font-size:10px;opacity:0.5;letter-spacing:1px;">HIGH</span>
@@ -366,65 +415,125 @@
   "use strict";
 
   // --- State ---
-  const State = { IDLE: "idle", LISTENING: "listening", TIMING: "timing", BUZZING: "buzzing", RESETTING: "resetting" };
-  let currentState = State.IDLE;
-  let timerDuration = 4.0; // seconds
-  let sensitivity = 30;    // threshold 5-80  (lower = more sensitive)
-  let reps = 0;
-  let audioCtx = null;
-  let micStream = null;
-  let analyser = null;
-  let dataArray = null;
-  let animFrameId = null;
-  let timerStart = 0;
-  let wakeLock = null;
+  var State = { IDLE: "idle", LISTENING: "listening", TIMING: "timing", BUZZING: "buzzing", RESETTING: "resetting", WAITING: "waiting" };
+  var currentState = State.IDLE;
+  var timerDuration = 4.0;   // seconds
+  var buzzDuration = 0.75;   // seconds (0.25-1.0)
+  var sensitivity = 30;      // threshold 5-80 (lower = more sensitive)
+  var detectMode = "all";    // "all" or "batcrack"
+  var appMode = "listen";    // "listen" or "manual"
+  var reps = 0;
+  var audioCtx = null;
+  var micStream = null;
+  var analyser = null;
+  var dataArray = null;
+  var freqArray = null;
+  var animFrameId = null;
+  var timerStart = 0;
+  var wakeLock = null;
 
   // --- DOM ---
-  const statusArea    = document.getElementById("statusArea");
-  const statusLabel   = document.getElementById("statusLabel");
-  const countdownDisp = document.getElementById("countdownDisplay");
-  const micLevelBar   = document.getElementById("micLevelBar");
-  const micLevelFill  = document.getElementById("micLevelFill");
-  const micThreshold  = document.getElementById("micThresholdLine");
-  const repsDisplay   = document.getElementById("repsDisplay");
-  const controlsDiv   = document.getElementById("controls");
-  const timerValueEl  = document.getElementById("timerValue");
-  const mainButton    = document.getElementById("mainButton");
-  const timerDown     = document.getElementById("timerDown");
-  const timerUp       = document.getElementById("timerUp");
-  const sensSlider    = document.getElementById("sensitivitySlider");
-  const soundSelect   = document.getElementById("soundSelect");
+  var statusArea      = document.getElementById("statusArea");
+  var statusLabel     = document.getElementById("statusLabel");
+  var countdownDisp   = document.getElementById("countdownDisplay");
+  var micLevelBar     = document.getElementById("micLevelBar");
+  var micLevelFill    = document.getElementById("micLevelFill");
+  var micThreshold    = document.getElementById("micThresholdLine");
+  var repsDisplay     = document.getElementById("repsDisplay");
+  var controlsDiv     = document.getElementById("controls");
+  var timerValueEl    = document.getElementById("timerValue");
+  var mainButton      = document.getElementById("mainButton");
+  var timerDown       = document.getElementById("timerDown");
+  var timerUp         = document.getElementById("timerUp");
+  var sensSlider      = document.getElementById("sensitivitySlider");
+  var soundSelect     = document.getElementById("soundSelect");
+  var buzzValueEl     = document.getElementById("buzzValue");
+  var buzzDown        = document.getElementById("buzzDown");
+  var buzzUp          = document.getElementById("buzzUp");
+  var detectModeSelect = document.getElementById("detectModeSelect");
+  var modeSelect      = document.getElementById("modeSelect");
+  var goButton        = document.getElementById("goButton");
+  var sensitivityRow  = document.getElementById("sensitivityRow");
+  var detectModeRow   = document.getElementById("detectModeRow");
 
-  // --- Controls ---
+  // --- Format helpers ---
+  function formatTime(val) {
+    // Show 1 decimal for clean tenths (4.0, 4.5), 2 decimals for .25/.75
+    return (Math.round(val * 100) % 10 === 0) ? val.toFixed(1) : val.toFixed(2);
+  }
+
+  // --- Controls: Timer ---
   function updateTimerDisplay() {
-    timerValueEl.textContent = timerDuration.toFixed(1) + "s";
-    // Also update the big countdown in idle state
+    timerValueEl.textContent = formatTime(timerDuration) + "s";
     if (currentState === State.IDLE) {
-      countdownDisp.textContent = timerDuration.toFixed(1);
+      countdownDisp.textContent = formatTime(timerDuration);
     }
   }
 
   timerDown.addEventListener("click", function() {
-    timerDuration = Math.max(1.0, timerDuration - 0.5);
+    timerDuration = Math.round(Math.max(1.0, timerDuration - 0.25) * 100) / 100;
     updateTimerDisplay();
   });
 
   timerUp.addEventListener("click", function() {
-    timerDuration = Math.min(10.0, timerDuration + 0.5);
+    timerDuration = Math.round(Math.min(10.0, timerDuration + 0.25) * 100) / 100;
     updateTimerDisplay();
   });
 
+  // --- Controls: Buzz Duration ---
+  function updateBuzzDisplay() {
+    buzzValueEl.textContent = formatTime(buzzDuration) + "s";
+  }
+
+  buzzDown.addEventListener("click", function() {
+    buzzDuration = Math.round(Math.max(0.25, buzzDuration - 0.25) * 100) / 100;
+    updateBuzzDisplay();
+  });
+
+  buzzUp.addEventListener("click", function() {
+    buzzDuration = Math.round(Math.min(1.0, buzzDuration + 0.25) * 100) / 100;
+    updateBuzzDisplay();
+  });
+
+  // --- Controls: Sensitivity ---
   sensSlider.addEventListener("input", function() {
     sensitivity = parseInt(sensSlider.value, 10);
     updateThresholdLine();
   });
 
   function updateThresholdLine() {
-    // Map sensitivity (5-80) to percentage position on the bar
     var pct = ((sensitivity - 5) / 75) * 100;
     micThreshold.style.left = pct + "%";
   }
   updateThresholdLine();
+
+  // --- Controls: Detect Mode ---
+  detectModeSelect.addEventListener("change", function() {
+    detectMode = detectModeSelect.value;
+  });
+
+  // --- Controls: App Mode ---
+  modeSelect.addEventListener("change", function() {
+    appMode = modeSelect.value;
+    updateModeVisibility();
+  });
+
+  function updateModeVisibility() {
+    if (appMode === "manual") {
+      sensitivityRow.style.display = "none";
+      detectModeRow.style.display = "none";
+    } else {
+      sensitivityRow.style.display = "flex";
+      detectModeRow.style.display = "flex";
+    }
+  }
+
+  // --- GO Button ---
+  goButton.addEventListener("click", function() {
+    if (currentState === State.WAITING) {
+      startTimer();
+    }
+  });
 
   // --- Main Button ---
   mainButton.addEventListener("click", function() {
@@ -438,7 +547,6 @@
   // --- Audio Setup ---
   async function initAudio() {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    // Resume audio context (required by iOS Safari after user gesture)
     if (audioCtx.state === "suspended") {
       await audioCtx.resume();
     }
@@ -449,6 +557,7 @@
     analyser.smoothingTimeConstant = 0.3;
     source.connect(analyser);
     dataArray = new Uint8Array(analyser.fftSize);
+    freqArray = new Uint8Array(analyser.frequencyBinCount);
   }
 
   // --- Wake Lock ---
@@ -468,7 +577,6 @@
     }
   }
 
-  // Re-acquire wake lock on visibility change
   document.addEventListener("visibilitychange", function() {
     if (document.visibilityState === "visible" && currentState !== State.IDLE) {
       requestWakeLock();
@@ -483,9 +591,10 @@
     switch (newState) {
       case State.IDLE:
         statusLabel.textContent = "READY";
-        countdownDisp.textContent = timerDuration.toFixed(1);
+        countdownDisp.textContent = formatTime(timerDuration);
         countdownDisp.classList.add("dimmed");
         micLevelBar.style.display = "none";
+        goButton.style.display = "none";
         repsDisplay.textContent = "";
         mainButton.textContent = "Start Drill";
         mainButton.className = "main-button start";
@@ -493,9 +602,10 @@
         break;
       case State.LISTENING:
         statusLabel.textContent = "LISTENING";
-        countdownDisp.textContent = timerDuration.toFixed(1);
+        countdownDisp.textContent = formatTime(timerDuration);
         countdownDisp.classList.remove("dimmed");
         micLevelBar.style.display = "block";
+        goButton.style.display = "none";
         mainButton.textContent = "Stop Drill";
         mainButton.className = "main-button stop";
         controlsDiv.classList.add("controls-disabled");
@@ -504,30 +614,55 @@
         statusLabel.textContent = "GO!";
         countdownDisp.classList.remove("dimmed");
         micLevelBar.style.display = "none";
+        goButton.style.display = "none";
         break;
       case State.BUZZING:
         statusLabel.textContent = "TIME!";
         countdownDisp.textContent = "0.0";
+        goButton.style.display = "none";
         break;
       case State.RESETTING:
         statusLabel.textContent = "RESET";
+        goButton.style.display = "none";
+        break;
+      case State.WAITING:
+        statusLabel.textContent = "TAP GO";
+        countdownDisp.textContent = formatTime(timerDuration);
+        countdownDisp.classList.remove("dimmed");
+        micLevelBar.style.display = "none";
+        goButton.style.display = "block";
+        mainButton.textContent = "Stop Drill";
+        mainButton.className = "main-button stop";
+        controlsDiv.classList.add("controls-disabled");
         break;
     }
   }
 
   // --- Drill Flow ---
   async function startDrill() {
-    try {
-      await initAudio();
-    } catch(e) {
-      alert("Microphone access is required.\nPlease allow mic access and try again.");
-      return;
+    if (appMode === "listen") {
+      try {
+        await initAudio();
+      } catch(e) {
+        alert("Microphone access is required.\nPlease allow mic access and try again.");
+        return;
+      }
+    } else {
+      // Manual mode: just create audio context for sound playback
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended") {
+        await audioCtx.resume();
+      }
     }
     reps = 0;
     updateReps();
     await requestWakeLock();
-    setState(State.LISTENING);
-    listenLoop();
+    if (appMode === "listen") {
+      setState(State.LISTENING);
+      listenLoop();
+    } else {
+      setState(State.WAITING);
+    }
   }
 
   function stopDrill() {
@@ -549,22 +684,36 @@
   }
 
   // --- Listening Loop ---
-  let debounceUntil = 0;
+  var debounceUntil = 0;
 
   function listenLoop() {
     if (currentState !== State.LISTENING) return;
 
-    analyser.getByteTimeDomainData(dataArray);
+    var level;
 
-    // Calculate peak amplitude (0-128 range from center 128)
-    var peak = 0;
-    for (var i = 0; i < dataArray.length; i++) {
-      var amp = Math.abs(dataArray[i] - 128);
-      if (amp > peak) peak = amp;
+    if (detectMode === "batcrack") {
+      // Frequency-domain: focus on 1-6 kHz bins
+      analyser.getByteFrequencyData(freqArray);
+      var binHz = audioCtx.sampleRate / analyser.fftSize;
+      var lowBin = Math.floor(1000 / binHz);
+      var highBin = Math.min(freqArray.length - 1, Math.ceil(6000 / binHz));
+      var sum = 0;
+      var count = 0;
+      for (var i = lowBin; i <= highBin; i++) {
+        sum += freqArray[i];
+        count++;
+      }
+      level = (count > 0) ? (sum / count) / 255 * 100 : 0;
+    } else {
+      // "all" mode: original time-domain peak amplitude detection
+      analyser.getByteTimeDomainData(dataArray);
+      var peak = 0;
+      for (var i = 0; i < dataArray.length; i++) {
+        var amp = Math.abs(dataArray[i] - 128);
+        if (amp > peak) peak = amp;
+      }
+      level = Math.min(100, (peak / 128) * 100);
     }
-
-    // Normalize to 0-100
-    var level = Math.min(100, (peak / 128) * 100);
 
     // Update mic level bar
     micLevelFill.style.width = level + "%";
@@ -573,7 +722,7 @@
     var threshold = (sensitivity / 80) * 100;
     var now = performance.now();
     if (level >= threshold && now > debounceUntil) {
-      debounceUntil = now + 500; // 500ms debounce
+      debounceUntil = now + 500;
       startTimer();
       return;
     }
@@ -607,37 +756,51 @@
   // --- Buzzer Sounds ---
   function triggerBuzzer() {
     setState(State.BUZZING);
+    // Ensure audio context is active (may have suspended in background)
+    if (audioCtx && audioCtx.state === "suspended") {
+      audioCtx.resume();
+    }
     var sound = soundSelect.value;
     playSound(sound, function() {
       reps++;
       updateReps();
-      setState(State.RESETTING);
-      setTimeout(function() {
-        if (currentState === State.RESETTING) {
-          setState(State.LISTENING);
-          listenLoop();
-        }
-      }, 1000);
+      if (appMode === "manual") {
+        // Short pause then back to WAITING
+        setTimeout(function() {
+          if (currentState === State.BUZZING) {
+            setState(State.WAITING);
+          }
+        }, 200);
+      } else {
+        setState(State.RESETTING);
+        var resetDelay = Math.max(300, buzzDuration * 500);
+        setTimeout(function() {
+          if (currentState === State.RESETTING) {
+            setState(State.LISTENING);
+            listenLoop();
+          }
+        }, resetDelay);
+      }
     });
   }
 
   function playSound(type, onDone) {
     var ctx = audioCtx;
     if (!ctx) { onDone(); return; }
+    var dur = buzzDuration;
     switch (type) {
-      case "airhorn":      playAirHorn(ctx, onDone); break;
-      case "cashregister": playCashRegister(ctx, onDone); break;
-      case "buzzer":       playGameBuzzer(ctx, onDone); break;
-      case "whistle":      playWhistle(ctx, onDone); break;
-      case "siren":        playSiren(ctx, onDone); break;
-      case "triplebeep":   playTripleBeep(ctx, onDone); break;
-      default:             playAirHorn(ctx, onDone);
+      case "airhorn":      playAirHorn(ctx, dur, onDone); break;
+      case "cashregister": playCashRegister(ctx, dur, onDone); break;
+      case "buzzer":       playGameBuzzer(ctx, dur, onDone); break;
+      case "whistle":      playWhistle(ctx, dur, onDone); break;
+      case "siren":        playSiren(ctx, dur, onDone); break;
+      case "triplebeep":   playTripleBeep(ctx, dur, onDone); break;
+      default:             playAirHorn(ctx, dur, onDone);
     }
   }
 
   // 1. Air Horn - loud stadium horn
-  function playAirHorn(ctx, onDone) {
-    var duration = 1.5;
+  function playAirHorn(ctx, duration, onDone) {
     var now = ctx.currentTime;
     var osc1 = ctx.createOscillator(); osc1.type = "sawtooth";
     osc1.frequency.setValueAtTime(280, now);
@@ -651,7 +814,7 @@
     var gain = ctx.createGain();
     gain.gain.setValueAtTime(0, now);
     gain.gain.linearRampToValueAtTime(1.0, now + 0.05);
-    gain.gain.setValueAtTime(1.0, now + duration - 0.3);
+    gain.gain.setValueAtTime(1.0, now + duration - Math.min(0.3, duration * 0.2));
     gain.gain.linearRampToValueAtTime(0, now + duration);
     var ws = ctx.createWaveShaper();
     var curve = new Float32Array(256);
@@ -665,40 +828,42 @@
   }
 
   // 2. Cash Register - cha-ching!
-  function playCashRegister(ctx, onDone) {
+  function playCashRegister(ctx, duration, onDone) {
     var now = ctx.currentTime;
-    var gain = ctx.createGain();
-    gain.connect(ctx.destination);
-    // Rapid ratchet clicks (3 quick tones ascending)
-    var freqs = [800, 1000, 1200];
-    for (var i = 0; i < 3; i++) {
-      var o = ctx.createOscillator(); o.type = "square";
-      var g = ctx.createGain();
-      o.frequency.setValueAtTime(freqs[i], now + i*0.08);
-      g.gain.setValueAtTime(0, now + i*0.08);
-      g.gain.linearRampToValueAtTime(0.6, now + i*0.08 + 0.01);
-      g.gain.linearRampToValueAtTime(0, now + i*0.08 + 0.07);
-      o.connect(g); g.connect(ctx.destination);
-      o.start(now + i*0.08); o.stop(now + i*0.08 + 0.08);
+    // Ratchet clicks only if duration allows (clicks take ~0.24s)
+    if (duration >= 0.3) {
+      var clickScale = Math.min(1, duration / 0.5);
+      var freqs = [800, 1000, 1200];
+      for (var i = 0; i < 3; i++) {
+        var t = now + i * 0.08 * clickScale;
+        var o = ctx.createOscillator(); o.type = "square";
+        var g = ctx.createGain();
+        o.frequency.setValueAtTime(freqs[i], t);
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(0.6, t + 0.01);
+        g.gain.linearRampToValueAtTime(0, t + 0.07 * clickScale);
+        o.connect(g); g.connect(ctx.destination);
+        o.start(t); o.stop(t + 0.08 * clickScale);
+      }
     }
     // Ching! - bright bell tone
+    var bellStart = Math.min(0.28, duration * 0.35);
     var bell = ctx.createOscillator(); bell.type = "sine";
-    bell.frequency.setValueAtTime(2400, now + 0.28);
+    bell.frequency.setValueAtTime(2400, now + bellStart);
     var bell2 = ctx.createOscillator(); bell2.type = "sine";
-    bell2.frequency.setValueAtTime(3600, now + 0.28);
+    bell2.frequency.setValueAtTime(3600, now + bellStart);
     var bg = ctx.createGain();
-    bg.gain.setValueAtTime(0, now + 0.28);
-    bg.gain.linearRampToValueAtTime(0.8, now + 0.3);
-    bg.gain.exponentialRampToValueAtTime(0.01, now + 1.2);
+    bg.gain.setValueAtTime(0, now + bellStart);
+    bg.gain.linearRampToValueAtTime(0.8, now + bellStart + 0.02);
+    bg.gain.exponentialRampToValueAtTime(0.01, now + duration);
     bell.connect(bg); bell2.connect(bg); bg.connect(ctx.destination);
-    bell.start(now + 0.28); bell2.start(now + 0.28);
-    bell.stop(now + 1.3); bell2.stop(now + 1.3);
-    setTimeout(onDone, 1300);
+    bell.start(now + bellStart); bell2.start(now + bellStart);
+    bell.stop(now + duration); bell2.stop(now + duration);
+    setTimeout(onDone, duration * 1000);
   }
 
   // 3. Game Buzzer - classic wrong-answer buzz
-  function playGameBuzzer(ctx, onDone) {
-    var duration = 1.0;
+  function playGameBuzzer(ctx, duration, onDone) {
     var now = ctx.currentTime;
     var osc1 = ctx.createOscillator(); osc1.type = "sawtooth";
     osc1.frequency.setValueAtTime(100, now);
@@ -707,7 +872,7 @@
     var gain = ctx.createGain();
     gain.gain.setValueAtTime(0, now);
     gain.gain.linearRampToValueAtTime(0.9, now + 0.02);
-    gain.gain.setValueAtTime(0.9, now + duration - 0.1);
+    gain.gain.setValueAtTime(0.9, now + duration - Math.min(0.1, duration * 0.1));
     gain.gain.linearRampToValueAtTime(0, now + duration);
     osc1.connect(gain); osc2.connect(gain); gain.connect(ctx.destination);
     osc1.start(now); osc2.start(now);
@@ -716,31 +881,27 @@
   }
 
   // 4. Whistle - coach's whistle blast
-  function playWhistle(ctx, onDone) {
-    var duration = 1.2;
+  function playWhistle(ctx, duration, onDone) {
     var now = ctx.currentTime;
-    // Main whistle tone
+    var s = duration / 1.2; // scale factor
     var osc = ctx.createOscillator(); osc.type = "sine";
     osc.frequency.setValueAtTime(2800, now);
-    // Add slight vibrato
     var lfo = ctx.createOscillator(); lfo.type = "sine";
     lfo.frequency.setValueAtTime(6, now);
     var lfoGain = ctx.createGain();
     lfoGain.gain.setValueAtTime(30, now);
     lfo.connect(lfoGain); lfoGain.connect(osc.frequency);
-    // Add breathy noise via second oscillator
     var osc2 = ctx.createOscillator(); osc2.type = "triangle";
     osc2.frequency.setValueAtTime(5600, now);
     var noiseGain = ctx.createGain();
     noiseGain.gain.setValueAtTime(0.15, now);
     osc2.connect(noiseGain);
-    // Envelope
     var gain = ctx.createGain();
     gain.gain.setValueAtTime(0, now);
     gain.gain.linearRampToValueAtTime(0.7, now + 0.05);
-    gain.gain.setValueAtTime(0.7, now + 0.4);
-    gain.gain.linearRampToValueAtTime(0.8, now + 0.5);
-    gain.gain.setValueAtTime(0.8, now + duration - 0.15);
+    gain.gain.setValueAtTime(0.7, now + Math.max(0.06, 0.4 * s));
+    gain.gain.linearRampToValueAtTime(0.8, now + Math.max(0.07, 0.5 * s));
+    gain.gain.setValueAtTime(0.8, now + duration - Math.min(0.15, duration * 0.125));
     gain.gain.linearRampToValueAtTime(0, now + duration);
     osc.connect(gain); noiseGain.connect(gain); gain.connect(ctx.destination);
     osc.start(now); osc2.start(now); lfo.start(now);
@@ -749,19 +910,18 @@
   }
 
   // 5. Siren - rising/falling emergency siren
-  function playSiren(ctx, onDone) {
-    var duration = 1.5;
+  function playSiren(ctx, duration, onDone) {
     var now = ctx.currentTime;
+    var s = duration / 1.5; // scale factor
     var osc = ctx.createOscillator(); osc.type = "sawtooth";
-    // Sweep up then down
     osc.frequency.setValueAtTime(400, now);
-    osc.frequency.linearRampToValueAtTime(1200, now + 0.5);
-    osc.frequency.linearRampToValueAtTime(400, now + 1.0);
-    osc.frequency.linearRampToValueAtTime(1000, now + 1.4);
+    osc.frequency.linearRampToValueAtTime(1200, now + 0.5 * s);
+    osc.frequency.linearRampToValueAtTime(400, now + 1.0 * s);
+    osc.frequency.linearRampToValueAtTime(1000, now + Math.min(1.4 * s, duration - 0.01));
     var gain = ctx.createGain();
     gain.gain.setValueAtTime(0, now);
     gain.gain.linearRampToValueAtTime(0.7, now + 0.05);
-    gain.gain.setValueAtTime(0.7, now + duration - 0.15);
+    gain.gain.setValueAtTime(0.7, now + duration - Math.min(0.15, duration * 0.1));
     gain.gain.linearRampToValueAtTime(0, now + duration);
     osc.connect(gain); gain.connect(ctx.destination);
     osc.start(now); osc.stop(now + duration);
@@ -769,21 +929,23 @@
   }
 
   // 6. Triple Beep - three loud staccato beeps
-  function playTripleBeep(ctx, onDone) {
+  function playTripleBeep(ctx, duration, onDone) {
     var now = ctx.currentTime;
+    var spacing = duration / 3;
+    var beepLen = Math.min(0.2, spacing * 0.8);
     for (var i = 0; i < 3; i++) {
-      var t = now + i * 0.3;
+      var t = now + i * spacing;
       var osc = ctx.createOscillator(); osc.type = "square";
       osc.frequency.setValueAtTime(1000, t);
       var gain = ctx.createGain();
       gain.gain.setValueAtTime(0, t);
       gain.gain.linearRampToValueAtTime(0.8, t + 0.01);
-      gain.gain.setValueAtTime(0.8, t + 0.15);
-      gain.gain.linearRampToValueAtTime(0, t + 0.2);
+      gain.gain.setValueAtTime(0.8, t + beepLen * 0.75);
+      gain.gain.linearRampToValueAtTime(0, t + beepLen);
       osc.connect(gain); gain.connect(ctx.destination);
-      osc.start(t); osc.stop(t + 0.25);
+      osc.start(t); osc.stop(t + beepLen + 0.01);
     }
-    setTimeout(onDone, 1000);
+    setTimeout(onDone, duration * 1000);
   }
 
 })();
