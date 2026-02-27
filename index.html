@@ -546,11 +546,8 @@
   });
 
   // --- Audio Setup ---
-  async function initAudio() {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === "suspended") {
-      await audioCtx.resume();
-    }
+  // Sets up mic input on the already-created audioCtx
+  async function initMic() {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     var source = audioCtx.createMediaStreamSource(micStream);
     analyser = audioCtx.createAnalyser();
@@ -639,20 +636,31 @@
     }
   }
 
+  // iOS audio unlock: play a silent buffer synchronously from a user gesture
+  // to permanently unlock the AudioContext for later non-gesture playback
+  function unlockiOSAudio(ctx) {
+    var buf = ctx.createBuffer(1, 1, 22050);
+    var src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start(0);
+    ctx.resume();
+  }
+
   // --- Drill Flow ---
   async function startDrill() {
+    // Create and unlock AudioContext SYNCHRONOUSLY in the tap gesture.
+    // iOS Safari only allows audio from contexts unlocked during a user gesture.
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    unlockiOSAudio(audioCtx);
+
     if (appMode === "listen") {
       try {
-        await initAudio();
+        await initMic();
       } catch(e) {
         alert("Microphone access is required.\nPlease allow mic access and try again.");
+        audioCtx.close(); audioCtx = null;
         return;
-      }
-    } else {
-      // Manual mode: just create audio context for sound playback
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      if (audioCtx.state === "suspended") {
-        await audioCtx.resume();
       }
     }
     reps = 0;
@@ -757,6 +765,8 @@
   // --- Buzzer Sounds ---
   function triggerBuzzer() {
     setState(State.BUZZING);
+    // Ensure context is running (iOS may suspend it during countdown)
+    if (audioCtx && audioCtx.state === "suspended") { audioCtx.resume(); }
     var sound = soundSelect.value;
     playSound(sound, function() {
       reps++;
@@ -947,40 +957,28 @@
   // --- Test Sound (debug) ---
   var testBtn = document.getElementById("testSoundBtn");
   testBtn.addEventListener("click", function() {
-    testBtn.textContent = "JS OK...";
     try {
+      // iOS requires oscillator.start() SYNCHRONOUSLY in the tap handler.
+      // Putting it inside .then() (after resume) loses the gesture context.
       var ctx = new (window.AudioContext || window.webkitAudioContext)();
-      testBtn.textContent = "Ctx:" + ctx.state;
-      if (ctx.state === "suspended") {
-        ctx.resume().then(function() {
-          testBtn.textContent = "Resumed, playing...";
-          doTestBeep(ctx);
-        }).catch(function(e) {
-          testBtn.textContent = "Resume err:" + e.message;
-        });
-      } else {
-        testBtn.textContent = "Playing...";
-        doTestBeep(ctx);
-      }
+      var now = ctx.currentTime;
+      var osc = ctx.createOscillator();
+      osc.type = "square";
+      osc.frequency.setValueAtTime(800, now);
+      var gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.8, now);
+      gain.gain.linearRampToValueAtTime(0, now + 0.5);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);      // MUST be synchronous in gesture
+      osc.stop(now + 0.5);
+      ctx.resume();         // resume AFTER start
+      testBtn.textContent = "Playing!";
+      setTimeout(function() { testBtn.textContent = "Test Sound"; }, 1500);
     } catch(e) {
       testBtn.textContent = "ERR:" + e.message;
     }
   });
-
-  function doTestBeep(ctx) {
-    var now = ctx.currentTime;
-    var osc = ctx.createOscillator();
-    osc.type = "square";
-    osc.frequency.setValueAtTime(800, now);
-    var gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.8, now);
-    gain.gain.linearRampToValueAtTime(0, now + 0.5);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.5);
-    setTimeout(function() { testBtn.textContent = "Test Sound"; }, 1500);
-  }
 
 })();
 </script>
