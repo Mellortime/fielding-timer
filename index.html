@@ -754,11 +754,11 @@
   }
 
   // --- Buzzer Sounds ---
-  function triggerBuzzer() {
+  async function triggerBuzzer() {
     setState(State.BUZZING);
-    // Ensure audio context is active (may have suspended in background)
+    // Ensure audio context is active (iOS Safari suspends aggressively)
     if (audioCtx && audioCtx.state === "suspended") {
-      audioCtx.resume();
+      await audioCtx.resume();
     }
     var sound = soundSelect.value;
     playSound(sound, function() {
