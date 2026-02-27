@@ -412,6 +412,8 @@
   <button id="testWavBtn" style="margin-top:4px;padding:6px 16px;background:#4a9;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;">Test WAV</button>
 </div>
 
+<audio id="audioEl" playsinline></audio>
+
 <script>
 (function() {
   "use strict";
@@ -426,6 +428,7 @@
   var appMode = "listen";    // "listen" or "manual"
   var reps = 0;
   var audioCtx = null;
+  var audioOut = null;     // MediaStreamDestination for iOS audio routing
   var micStream = null;
   var analyser = null;
   var dataArray = null;
@@ -637,30 +640,25 @@
     }
   }
 
-  // iOS audio unlock: play a silent buffer synchronously from a user gesture
-  // to permanently unlock the AudioContext for later non-gesture playback
-  function unlockiOSAudio(ctx) {
-    var buf = ctx.createBuffer(1, 1, 22050);
-    var src = ctx.createBufferSource();
-    src.buffer = buf;
-    src.connect(ctx.destination);
-    src.start(0);
-    ctx.resume();
-  }
-
   // --- Drill Flow ---
   async function startDrill() {
-    // Create and unlock AudioContext SYNCHRONOUSLY in the tap gesture.
-    // iOS Safari only allows audio from contexts unlocked during a user gesture.
+    // Create AudioContext and route through <audio> element for iOS.
+    // iOS Safari's ctx.destination doesn't output to speakers, but
+    // MediaStreamDestination -> <audio> element does.
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    unlockiOSAudio(audioCtx);
+    var streamDest = audioCtx.createMediaStreamDestination();
+    audioOut = streamDest;
+    var audioEl = document.getElementById("audioEl");
+    audioEl.srcObject = streamDest.stream;
+    audioEl.play();   // MUST be synchronous in user gesture
+    audioCtx.resume();
 
     if (appMode === "listen") {
       try {
         await initMic();
       } catch(e) {
         alert("Microphone access is required.\nPlease allow mic access and try again.");
-        audioCtx.close(); audioCtx = null;
+        audioCtx.close(); audioCtx = null; audioOut = null;
         return;
       }
     }
@@ -681,6 +679,9 @@
       micStream.getTracks().forEach(function(t) { t.stop(); });
       micStream = null;
     }
+    audioOut = null;
+    var audioEl = document.getElementById("audioEl");
+    audioEl.pause(); audioEl.srcObject = null;
     if (audioCtx) {
       audioCtx.close();
       audioCtx = null;
@@ -828,7 +829,7 @@
     for (var i = 0; i < 256; i++) { var x = (i*2)/256-1; curve[i] = (Math.PI+200)*x/(Math.PI+200*Math.abs(x)); }
     ws.curve = curve; ws.oversample = "4x";
     osc1.connect(ws); osc2.connect(ws); osc3.connect(ws);
-    ws.connect(gain); gain.connect(ctx.destination);
+    ws.connect(gain); gain.connect(audioOut);
     osc1.start(now); osc2.start(now); osc3.start(now);
     osc1.stop(now+duration); osc2.stop(now+duration); osc3.stop(now+duration);
     setTimeout(onDone, duration * 1000);
@@ -849,7 +850,7 @@
         g.gain.setValueAtTime(0, t);
         g.gain.linearRampToValueAtTime(0.6, t + 0.01);
         g.gain.linearRampToValueAtTime(0, t + 0.07 * clickScale);
-        o.connect(g); g.connect(ctx.destination);
+        o.connect(g); g.connect(audioOut);
         o.start(t); o.stop(t + 0.08 * clickScale);
       }
     }
@@ -863,7 +864,7 @@
     bg.gain.setValueAtTime(0, now + bellStart);
     bg.gain.linearRampToValueAtTime(0.8, now + bellStart + 0.02);
     bg.gain.exponentialRampToValueAtTime(0.01, now + duration);
-    bell.connect(bg); bell2.connect(bg); bg.connect(ctx.destination);
+    bell.connect(bg); bell2.connect(bg); bg.connect(audioOut);
     bell.start(now + bellStart); bell2.start(now + bellStart);
     bell.stop(now + duration); bell2.stop(now + duration);
     setTimeout(onDone, duration * 1000);
@@ -881,7 +882,7 @@
     gain.gain.linearRampToValueAtTime(0.9, now + 0.02);
     gain.gain.setValueAtTime(0.9, now + duration - Math.min(0.1, duration * 0.1));
     gain.gain.linearRampToValueAtTime(0, now + duration);
-    osc1.connect(gain); osc2.connect(gain); gain.connect(ctx.destination);
+    osc1.connect(gain); osc2.connect(gain); gain.connect(audioOut);
     osc1.start(now); osc2.start(now);
     osc1.stop(now + duration); osc2.stop(now + duration);
     setTimeout(onDone, duration * 1000);
@@ -910,7 +911,7 @@
     gain.gain.linearRampToValueAtTime(0.8, now + Math.max(0.07, 0.5 * s));
     gain.gain.setValueAtTime(0.8, now + duration - Math.min(0.15, duration * 0.125));
     gain.gain.linearRampToValueAtTime(0, now + duration);
-    osc.connect(gain); noiseGain.connect(gain); gain.connect(ctx.destination);
+    osc.connect(gain); noiseGain.connect(gain); gain.connect(audioOut);
     osc.start(now); osc2.start(now); lfo.start(now);
     osc.stop(now+duration); osc2.stop(now+duration); lfo.stop(now+duration);
     setTimeout(onDone, duration * 1000);
@@ -930,7 +931,7 @@
     gain.gain.linearRampToValueAtTime(0.7, now + 0.05);
     gain.gain.setValueAtTime(0.7, now + duration - Math.min(0.15, duration * 0.1));
     gain.gain.linearRampToValueAtTime(0, now + duration);
-    osc.connect(gain); gain.connect(ctx.destination);
+    osc.connect(gain); gain.connect(audioOut);
     osc.start(now); osc.stop(now + duration);
     setTimeout(onDone, duration * 1000);
   }
@@ -949,19 +950,22 @@
       gain.gain.linearRampToValueAtTime(0.8, t + 0.01);
       gain.gain.setValueAtTime(0.8, t + beepLen * 0.75);
       gain.gain.linearRampToValueAtTime(0, t + beepLen);
-      osc.connect(gain); gain.connect(ctx.destination);
+      osc.connect(gain); gain.connect(audioOut);
       osc.start(t); osc.stop(t + beepLen + 0.01);
     }
     setTimeout(onDone, duration * 1000);
   }
 
-  // --- Test Sound (debug) ---
+  // --- Test Sound (debug) ‚Äî uses MediaStreamDestination like main app ---
   var testBtn = document.getElementById("testSoundBtn");
   testBtn.addEventListener("click", function() {
     try {
-      // iOS requires oscillator.start() SYNCHRONOUSLY in the tap handler.
-      // Putting it inside .then() (after resume) loses the gesture context.
       var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      var dest = ctx.createMediaStreamDestination();
+      var tmpAudio = new Audio();
+      tmpAudio.srcObject = dest.stream;
+      tmpAudio.play();
+      ctx.resume();
       var now = ctx.currentTime;
       var osc = ctx.createOscillator();
       osc.type = "square";
@@ -970,12 +974,11 @@
       gain.gain.setValueAtTime(0.8, now);
       gain.gain.linearRampToValueAtTime(0, now + 0.5);
       osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(now);      // MUST be synchronous in gesture
+      gain.connect(dest);
+      osc.start(now);
       osc.stop(now + 0.5);
-      ctx.resume();         // resume AFTER start
       testBtn.textContent = "Playing!";
-      setTimeout(function() { testBtn.textContent = "Test WebAudio"; }, 1500);
+      setTimeout(function() { testBtn.textContent = "Test WebAudio"; ctx.close(); }, 1500);
     } catch(e) {
       testBtn.textContent = "ERR:" + e.message;
     }
