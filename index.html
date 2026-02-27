@@ -978,7 +978,11 @@
       osc.start(now);
       osc.stop(now + 0.5);
       testBtn.textContent = "Playing!";
-      setTimeout(function() { testBtn.textContent = "Test WebAudio"; ctx.close(); }, 1500);
+      setTimeout(function() {
+        tmpAudio.pause(); tmpAudio.srcObject = null;
+        ctx.close();
+        testBtn.textContent = "Test WebAudio";
+      }, 600);
     } catch(e) {
       testBtn.textContent = "ERR:" + e.message;
     }
