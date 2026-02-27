@@ -945,15 +945,25 @@
   }
 
   // --- Test Sound (debug) ---
-  document.getElementById("testSoundBtn").addEventListener("click", function() {
-    var ctx = audioCtx;
-    if (!ctx) {
-      ctx = new (window.AudioContext || window.webkitAudioContext)();
-    }
-    if (ctx.state === "suspended") {
-      ctx.resume().then(function() { doTestBeep(ctx); });
-    } else {
-      doTestBeep(ctx);
+  var testBtn = document.getElementById("testSoundBtn");
+  testBtn.addEventListener("click", function() {
+    testBtn.textContent = "JS OK...";
+    try {
+      var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      testBtn.textContent = "Ctx:" + ctx.state;
+      if (ctx.state === "suspended") {
+        ctx.resume().then(function() {
+          testBtn.textContent = "Resumed, playing...";
+          doTestBeep(ctx);
+        }).catch(function(e) {
+          testBtn.textContent = "Resume err:" + e.message;
+        });
+      } else {
+        testBtn.textContent = "Playing...";
+        doTestBeep(ctx);
+      }
+    } catch(e) {
+      testBtn.textContent = "ERR:" + e.message;
     }
   });
 
@@ -969,6 +979,7 @@
     gain.connect(ctx.destination);
     osc.start(now);
     osc.stop(now + 0.5);
+    setTimeout(function() { testBtn.textContent = "Test Sound"; }, 1500);
   }
 
 })();
