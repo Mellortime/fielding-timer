@@ -339,6 +339,44 @@
     opacity: 0.4;
     pointer-events: none;
   }
+
+  .debug-overlay {
+    position: absolute;
+    bottom: 4px;
+    left: 8px;
+    right: 8px;
+    background: rgba(0, 0, 0, 0.88);
+    border: 1px solid var(--miners-gold);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 11px;
+    font-family: 'SF Mono', 'Menlo', monospace;
+    color: rgba(255, 255, 255, 0.9);
+    z-index: 100;
+    pointer-events: none;
+  }
+
+  .debug-line {
+    display: flex;
+    justify-content: space-between;
+    line-height: 1.6;
+  }
+
+  .debug-label { color: rgba(255,255,255,0.5); }
+  .debug-line span:last-child { font-weight: 700; color: var(--miners-gold); }
+
+  .debug-result {
+    margin-top: 2px;
+    padding-top: 2px;
+    border-top: 1px solid rgba(255,255,255,0.15);
+    color: rgba(255,255,255,0.5);
+    font-size: 10px;
+    display: block;
+  }
+
+  .debug-result.accepted { color: #4caf50; }
+  .debug-result.rejected { color: #f44336; }
+  .debug-result.verifying { color: var(--miners-gold); }
 </style>
 </head>
 <body>
@@ -358,6 +396,13 @@
   </div>
   <button class="go-button" id="goButton">GO</button>
   <div class="reps-display" id="repsDisplay"></div>
+  <div id="debugOverlay" class="debug-overlay" style="display:none;">
+    <div class="debug-line"><span class="debug-label">Onset</span><span id="dbgOnset">-</span></div>
+    <div class="debug-line"><span class="debug-label">Centroid</span><span id="dbgCentroid">-</span></div>
+    <div class="debug-line"><span class="debug-label">HF Ratio</span><span id="dbgHfRatio">-</span></div>
+    <div class="debug-line"><span class="debug-label">Flatness</span><span id="dbgFlatness">-</span></div>
+    <div class="debug-line debug-result" id="dbgResult">Triple-tap to close</div>
+  </div>
 </div>
 
 <div class="controls" id="controls">
@@ -430,6 +475,21 @@
   // --- State ---
   var State = { IDLE: "idle", LISTENING: "listening", TIMING: "timing", BUZZING: "buzzing", RESETTING: "resetting", WAITING: "waiting" };
   var currentState = State.IDLE;
+
+  // --- Bat Crack Detection Constants (tune these in the field) ---
+  var BC_FFT_SIZE = 2048;               // frequency resolution (~23 Hz/bin at 48kHz)
+  var BC_SMOOTHING = 0.1;               // low smoothing = faster transient response
+  var BC_ONSET_SENSITIVITY_LOW = 3;     // onset ratio at slider=5 (most sensitive)
+  var BC_ONSET_SENSITIVITY_HIGH = 20;   // onset ratio at slider=80 (least sensitive)
+  var BC_CENTROID_MIN_HZ = 2000;        // spectral centroid must exceed this
+  var BC_HF_ENERGY_RATIO_MIN = 0.50;    // fraction of energy above cutoff
+  var BC_HF_CUTOFF_HZ = 2000;           // frequency boundary for HF ratio
+  var BC_FLATNESS_MIN = 0.30;           // spectral flatness floor (0=tonal, 1=white noise)
+  var BC_DECAY_WINDOW_MS = 200;         // verify impulse decays within this window
+  var BC_DECAY_RATIO = 0.20;            // energy must drop below this fraction of peak
+  var BC_COOLDOWN_MS = 1500;            // post-detection cooldown
+  var BC_ENERGY_EPSILON = 0.001;        // prevent division by zero
+
   var timerDuration = 4.0;   // seconds
   var buzzDuration = 0.75;   // seconds (0.25-1.0)
   var sensitivity = 30;      // threshold 5-80 (lower = more sensitive)
@@ -564,8 +624,13 @@
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     var source = audioCtx.createMediaStreamSource(micStream);
     analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 512;
-    analyser.smoothingTimeConstant = 0.3;
+    if (detectMode === "batcrack") {
+      analyser.fftSize = BC_FFT_SIZE;              // 2048 for better freq resolution
+      analyser.smoothingTimeConstant = BC_SMOOTHING; // 0.1 for fast transient response
+    } else {
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.3;
+    }
     source.connect(analyser);
     dataArray = new Uint8Array(analyser.fftSize);
     freqArray = new Uint8Array(analyser.frequencyBinCount);
@@ -620,6 +685,8 @@
         mainButton.textContent = "Stop Drill";
         mainButton.className = "main-button stop";
         controlsDiv.classList.add("controls-disabled");
+        prevFrameEnergy = 0;
+        candidateInfo = null;
         break;
       case State.TIMING:
         statusLabel.textContent = "GO!";
@@ -703,42 +770,83 @@
     repsDisplay.textContent = reps > 0 ? "Reps: " + reps : "";
   }
 
-  // --- Listening Loop ---
+  // --- Listening State ---
   var debounceUntil = 0;
+  var prevFrameEnergy = 0;
+  var candidateInfo = null;  // { time: <ms>, peakEnergy: <number> } or null
 
+  // --- Bat Crack Feature Extraction ---
+  function computeFrameEnergy(freqArr, startBin, endBin) {
+    var sum = 0;
+    for (var i = startBin; i <= endBin; i++) {
+      sum += freqArr[i] * freqArr[i];
+    }
+    return sum;
+  }
+
+  function computeSpectralCentroid(freqArr, startBin, endBin, binHz) {
+    var weightedSum = 0;
+    var totalMag = 0;
+    for (var i = startBin; i <= endBin; i++) {
+      var mag = freqArr[i];
+      weightedSum += mag * (i * binHz);
+      totalMag += mag;
+    }
+    return totalMag > 0 ? weightedSum / totalMag : 0;
+  }
+
+  function computeHFEnergyRatio(freqArr, hfBin, endBin, totalEnergy) {
+    var hfEnergy = 0;
+    for (var i = hfBin; i <= endBin; i++) {
+      hfEnergy += freqArr[i] * freqArr[i];
+    }
+    return totalEnergy > 0 ? hfEnergy / totalEnergy : 0;
+  }
+
+  function computeSpectralFlatness(freqArr, startBin, endBin) {
+    var sumLog = 0;
+    var sumLin = 0;
+    var count = 0;
+    for (var i = startBin; i <= endBin; i++) {
+      var val = freqArr[i] + 1;  // +1 avoids log(0)
+      sumLog += Math.log(val);
+      sumLin += val;
+      count++;
+    }
+    if (count === 0 || sumLin === 0) return 0;
+    var geometricMean = Math.exp(sumLog / count);
+    var arithmeticMean = sumLin / count;
+    return geometricMean / arithmeticMean;
+  }
+
+  function getOnsetThreshold() {
+    // Map sensitivity slider (5-80) to onset ratio threshold (3x-20x)
+    return BC_ONSET_SENSITIVITY_LOW +
+      (sensitivity - 5) * (BC_ONSET_SENSITIVITY_HIGH - BC_ONSET_SENSITIVITY_LOW) / 75;
+  }
+
+  // --- Listen Loop: Dispatcher ---
   function listenLoop() {
     if (currentState !== State.LISTENING) return;
-
-    var level;
-
     if (detectMode === "batcrack") {
-      // Frequency-domain: focus on 1-6 kHz bins
-      analyser.getByteFrequencyData(freqArray);
-      var binHz = audioCtx.sampleRate / analyser.fftSize;
-      var lowBin = Math.floor(1000 / binHz);
-      var highBin = Math.min(freqArray.length - 1, Math.ceil(6000 / binHz));
-      var sum = 0;
-      var count = 0;
-      for (var i = lowBin; i <= highBin; i++) {
-        sum += freqArray[i];
-        count++;
-      }
-      level = (count > 0) ? (sum / count) / 255 * 100 : 0;
+      listenLoopBatCrack();
     } else {
-      // "all" mode: original time-domain peak amplitude detection
-      analyser.getByteTimeDomainData(dataArray);
-      var peak = 0;
-      for (var i = 0; i < dataArray.length; i++) {
-        var amp = Math.abs(dataArray[i] - 128);
-        if (amp > peak) peak = amp;
-      }
-      level = Math.min(100, (peak / 128) * 100);
+      listenLoopAll();
     }
+  }
 
-    // Update mic level bar
+  // --- Listen Loop: All Sound (unchanged from original) ---
+  function listenLoopAll() {
+    analyser.getByteTimeDomainData(dataArray);
+    var peak = 0;
+    for (var i = 0; i < dataArray.length; i++) {
+      var amp = Math.abs(dataArray[i] - 128);
+      if (amp > peak) peak = amp;
+    }
+    var level = Math.min(100, (peak / 128) * 100);
+
     micLevelFill.style.width = level + "%";
 
-    // Check threshold
     var threshold = (sensitivity / 80) * 100;
     var now = performance.now();
     if (level >= threshold && now > debounceUntil) {
@@ -746,7 +854,103 @@
       startTimer();
       return;
     }
+    animFrameId = requestAnimationFrame(listenLoop);
+  }
 
+  // --- Listen Loop: Bat Crack Multi-Feature Detector ---
+  function listenLoopBatCrack() {
+    var now = performance.now();
+
+    // Cooldown check
+    if (now < debounceUntil) {
+      animFrameId = requestAnimationFrame(listenLoop);
+      return;
+    }
+
+    // Get frequency data
+    analyser.getByteFrequencyData(freqArray);
+    var binHz = audioCtx.sampleRate / analyser.fftSize;
+    var totalBins = analyser.frequencyBinCount;
+    var startBin = 1;  // skip DC
+    var endBin = totalBins - 1;
+    var hfBin = Math.round(BC_HF_CUTOFF_HZ / binHz);
+
+    // Compute features
+    var currentEnergy = computeFrameEnergy(freqArray, startBin, endBin);
+    var onsetRatio = currentEnergy / (prevFrameEnergy + BC_ENERGY_EPSILON);
+    var centroid = computeSpectralCentroid(freqArray, startBin, endBin, binHz);
+    var hfRatio = computeHFEnergyRatio(freqArray, hfBin, endBin, currentEnergy);
+    var flatness = computeSpectralFlatness(freqArray, startBin, endBin);
+
+    // Update mic level bar: show onset ratio relative to threshold
+    var onsetThreshold = getOnsetThreshold();
+    var barLevel = Math.min(100, (onsetRatio / (onsetThreshold * 2)) * 100);
+    micLevelFill.style.width = barLevel + "%";
+
+    // Update debug overlay
+    updateDebugOverlay(onsetRatio, centroid, hfRatio, flatness);
+
+    // --- Candidate Verification Phase ---
+    if (candidateInfo !== null) {
+      var elapsed = now - candidateInfo.time;
+      if (elapsed >= BC_DECAY_WINDOW_MS) {
+        var decayRatio = currentEnergy / (candidateInfo.peakEnergy + BC_ENERGY_EPSILON);
+        if (decayRatio < BC_DECAY_RATIO) {
+          // CONFIRMED: impulse decayed quickly = bat crack
+          console.log("[BatCrack] CONFIRMED - decayed to " +
+            (decayRatio * 100).toFixed(1) + "% within " + elapsed.toFixed(0) + "ms");
+          setDebugResult("accepted", "CONFIRMED: decay=" + (decayRatio * 100).toFixed(1) + "%");
+          candidateInfo = null;
+          debounceUntil = now + BC_COOLDOWN_MS;
+          prevFrameEnergy = currentEnergy;
+          startTimer();
+          return;
+        } else {
+          // REJECTED: sustained energy = voice or noise
+          console.log("[BatCrack] REJECTED - sustained energy " +
+            (decayRatio * 100).toFixed(1) + "% after " + elapsed.toFixed(0) + "ms");
+          setDebugResult("rejected", "REJECTED: sustained=" + (decayRatio * 100).toFixed(1) + "%");
+          candidateInfo = null;
+        }
+      }
+      // Still within verification window
+      prevFrameEnergy = currentEnergy;
+      animFrameId = requestAnimationFrame(listenLoop);
+      return;
+    }
+
+    // --- Onset Detection Phase ---
+    var passed = true;
+    var reasons = [];
+
+    if (onsetRatio < onsetThreshold) {
+      passed = false;
+      reasons.push("onset=" + onsetRatio.toFixed(1) + "<" + onsetThreshold.toFixed(1));
+    }
+    if (centroid < BC_CENTROID_MIN_HZ) {
+      passed = false;
+      reasons.push("centroid=" + centroid.toFixed(0) + "<" + BC_CENTROID_MIN_HZ);
+    }
+    if (hfRatio < BC_HF_ENERGY_RATIO_MIN) {
+      passed = false;
+      reasons.push("hfRatio=" + (hfRatio * 100).toFixed(1) + "%<" + (BC_HF_ENERGY_RATIO_MIN * 100));
+    }
+    if (flatness < BC_FLATNESS_MIN) {
+      passed = false;
+      reasons.push("flat=" + flatness.toFixed(3) + "<" + BC_FLATNESS_MIN);
+    }
+
+    if (passed) {
+      // All instant features passed ‚Äî enter candidate verification
+      console.log("[BatCrack] CANDIDATE onset=" + onsetRatio.toFixed(1) +
+        " centroid=" + centroid.toFixed(0) + "Hz" +
+        " hfRatio=" + (hfRatio * 100).toFixed(1) + "%" +
+        " flatness=" + flatness.toFixed(3));
+      candidateInfo = { time: now, peakEnergy: currentEnergy };
+      setDebugResult("verifying", "Verifying decay...");
+    }
+
+    prevFrameEnergy = currentEnergy;
     animFrameId = requestAnimationFrame(listenLoop);
   }
 
@@ -963,6 +1167,44 @@
       osc.start(t); osc.stop(t + beepLen + 0.01);
     }
     setTimeout(onDone, duration * 1000);
+  }
+
+  // --- Debug Overlay ---
+  var debugOverlay = document.getElementById("debugOverlay");
+  var debugVisible = false;
+  var tripleTapCount = 0;
+  var tripleTapTimer = null;
+
+  statusArea.addEventListener("click", function(e) {
+    if (e.target === goButton) return;  // don't trigger on GO button
+    tripleTapCount++;
+    if (tripleTapCount === 1) {
+      tripleTapTimer = setTimeout(function() { tripleTapCount = 0; }, 600);
+    }
+    if (tripleTapCount >= 3) {
+      clearTimeout(tripleTapTimer);
+      tripleTapCount = 0;
+      debugVisible = !debugVisible;
+      debugOverlay.style.display = debugVisible ? "block" : "none";
+    }
+  });
+
+  function updateDebugOverlay(onset, centroid, hfRatio, flatness) {
+    if (!debugVisible) return;
+    document.getElementById("dbgOnset").textContent = onset.toFixed(1) + "x";
+    document.getElementById("dbgCentroid").textContent = centroid.toFixed(0) + " Hz";
+    document.getElementById("dbgHfRatio").textContent = (hfRatio * 100).toFixed(1) + "%";
+    document.getElementById("dbgFlatness").textContent = flatness.toFixed(3);
+  }
+
+  function setDebugResult(status, msg) {
+    var el = document.getElementById("dbgResult");
+    if (!el) return;
+    el.textContent = msg;
+    el.className = "debug-line debug-result" +
+      (status === "accepted" ? " accepted" :
+       status === "rejected" ? " rejected" :
+       status === "verifying" ? " verifying" : "");
   }
 
   // --- Test Audio ‚Äî plays the currently selected sound ---
