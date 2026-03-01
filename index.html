@@ -397,10 +397,10 @@
   <button class="go-button" id="goButton">GO</button>
   <div class="reps-display" id="repsDisplay"></div>
   <div id="debugOverlay" class="debug-overlay" style="display:none;">
-    <div class="debug-line"><span class="debug-label">Onset</span><span id="dbgOnset">-</span></div>
-    <div class="debug-line"><span class="debug-label">Centroid</span><span id="dbgCentroid">-</span></div>
-    <div class="debug-line"><span class="debug-label">HF Ratio</span><span id="dbgHfRatio">-</span></div>
-    <div class="debug-line"><span class="debug-label">Flatness</span><span id="dbgFlatness">-</span></div>
+    <div class="debug-line"><span class="debug-label">Spike</span><span id="dbgOnset">-</span></div>
+    <div class="debug-line"><span class="debug-label">Peak</span><span id="dbgCentroid">-</span></div>
+    <div class="debug-line"><span class="debug-label">Avg</span><span id="dbgHfRatio">-</span></div>
+    <div class="debug-line"><span class="debug-label">Thresh</span><span id="dbgFlatness">-</span></div>
     <div class="debug-line debug-result" id="dbgResult">Triple-tap to close</div>
   </div>
 </div>
@@ -477,18 +477,16 @@
   var currentState = State.IDLE;
 
   // --- Bat Crack Detection Constants (tune these in the field) ---
-  var BC_FFT_SIZE = 2048;               // frequency resolution (~23 Hz/bin at 48kHz)
-  var BC_SMOOTHING = 0.1;               // low smoothing = faster transient response
-  var BC_ONSET_SENSITIVITY_LOW = 1.5;   // onset ratio at slider=5 (most sensitive)
-  var BC_ONSET_SENSITIVITY_HIGH = 5.0;  // onset ratio at slider=80 (least sensitive)
-  var BC_CENTROID_MIN_HZ = 2000;        // spectral centroid must exceed this
-  var BC_HF_ENERGY_RATIO_MIN = 0.50;    // fraction of energy above cutoff
-  var BC_HF_CUTOFF_HZ = 2000;           // frequency boundary for HF ratio
-  var BC_FLATNESS_MIN = 0.30;           // spectral flatness floor (0=tonal, 1=white noise)
-  var BC_DECAY_WINDOW_MS = 200;         // verify impulse decays within this window
-  var BC_DECAY_RATIO = 0.50;            // energy must drop below this fraction of peak
+  // Uses time-domain peak spike detection ‚Äî works in reverberant indoor spaces
+  // where spectral features are unreliable.
+  var BC_FFT_SIZE = 2048;               // time-domain buffer size (~42ms at 48kHz)
+  var BC_SMOOTHING = 0.1;               // analyser smoothing (for any future freq use)
+  var BC_PEAK_SMOOTHING = 0.97;         // rolling avg decay (higher = slower, ~380ms half-life at 60fps)
+  var BC_MIN_PEAK = 0.05;              // minimum absolute peak amplitude to trigger
+  var BC_SPIKE_LOW = 3.0;              // spike ratio at slider=5 (most sensitive)
+  var BC_SPIKE_HIGH = 8.0;             // spike ratio at slider=80 (least sensitive)
   var BC_COOLDOWN_MS = 1500;            // post-detection cooldown
-  var BC_ENERGY_EPSILON = 0.001;        // prevent division by zero
+  var BC_EPSILON = 0.001;              // prevent division by zero
 
   var timerDuration = 4.0;   // seconds
   var buzzDuration = 0.75;   // seconds (0.25-1.0)
@@ -685,8 +683,7 @@
         mainButton.textContent = "Stop Drill";
         mainButton.className = "main-button stop";
         controlsDiv.classList.add("controls-disabled");
-        prevFrameEnergy = 0;
-        candidateInfo = null;
+        peakAvg = 0;
         break;
       case State.TIMING:
         statusLabel.textContent = "GO!";
@@ -772,57 +769,12 @@
 
   // --- Listening State ---
   var debounceUntil = 0;
-  var prevFrameEnergy = 0;
-  var candidateInfo = null;  // null or { phase, time, peakEnergy, peakCentroid, peakHfRatio, peakFlatness }
+  var peakAvg = 0;  // rolling average of peak amplitude for bat crack detection
 
-  // --- Bat Crack Feature Extraction ---
-  function computeFrameEnergy(freqArr, startBin, endBin) {
-    var sum = 0;
-    for (var i = startBin; i <= endBin; i++) {
-      sum += freqArr[i] * freqArr[i];
-    }
-    return sum;
-  }
-
-  function computeSpectralCentroid(freqArr, startBin, endBin, binHz) {
-    var weightedSum = 0;
-    var totalMag = 0;
-    for (var i = startBin; i <= endBin; i++) {
-      var mag = freqArr[i];
-      weightedSum += mag * (i * binHz);
-      totalMag += mag;
-    }
-    return totalMag > 0 ? weightedSum / totalMag : 0;
-  }
-
-  function computeHFEnergyRatio(freqArr, hfBin, endBin, totalEnergy) {
-    var hfEnergy = 0;
-    for (var i = hfBin; i <= endBin; i++) {
-      hfEnergy += freqArr[i] * freqArr[i];
-    }
-    return totalEnergy > 0 ? hfEnergy / totalEnergy : 0;
-  }
-
-  function computeSpectralFlatness(freqArr, startBin, endBin) {
-    var sumLog = 0;
-    var sumLin = 0;
-    var count = 0;
-    for (var i = startBin; i <= endBin; i++) {
-      var val = freqArr[i] + 1;  // +1 avoids log(0)
-      sumLog += Math.log(val);
-      sumLin += val;
-      count++;
-    }
-    if (count === 0 || sumLin === 0) return 0;
-    var geometricMean = Math.exp(sumLog / count);
-    var arithmeticMean = sumLin / count;
-    return geometricMean / arithmeticMean;
-  }
-
-  function getOnsetThreshold() {
-    // Map sensitivity slider (5-80) to onset ratio threshold (3x-20x)
-    return BC_ONSET_SENSITIVITY_LOW +
-      (sensitivity - 5) * (BC_ONSET_SENSITIVITY_HIGH - BC_ONSET_SENSITIVITY_LOW) / 75;
+  // --- Bat Crack Detection Helpers ---
+  function getSpikeThreshold() {
+    // Map sensitivity slider (5-80) to spike ratio threshold
+    return BC_SPIKE_LOW + (sensitivity - 5) * (BC_SPIKE_HIGH - BC_SPIKE_LOW) / 75;
   }
 
   // --- Listen Loop: Dispatcher ---
@@ -857,12 +809,11 @@
     animFrameId = requestAnimationFrame(listenLoop);
   }
 
-  // --- Listen Loop: Bat Crack Multi-Feature Detector ---
-  // Three-phase approach:
-  //   Phase 1 "onset": Detect energy jump (onset ratio exceeds threshold)
-  //   Phase 2 "spectral": Collect peak spectral values over ~50ms after onset
-  //   Phase 3 "decay": Verify energy decays within 200ms (impulse, not sustained)
-  var BC_SPECTRAL_WINDOW_MS = 50;  // collect peak spectral values for this long after onset
+  // --- Listen Loop: Bat Crack Peak Spike Detector ---
+  // Uses time-domain peak amplitude detection instead of spectral analysis.
+  // Works reliably in reverberant indoor spaces (fieldhouses, gyms) where
+  // spectral features become uniform due to room echo.
+  // Algorithm: detect sudden spike in peak waveform amplitude vs rolling average.
 
   function listenLoopBatCrack() {
     var now = performance.now();
@@ -873,154 +824,44 @@
       return;
     }
 
-    // Get frequency data
-    analyser.getByteFrequencyData(freqArray);
-    var binHz = audioCtx.sampleRate / analyser.fftSize;
-    var totalBins = analyser.frequencyBinCount;
-    var startBin = 1;  // skip DC
-    var endBin = totalBins - 1;
-    var hfBin = Math.round(BC_HF_CUTOFF_HZ / binHz);
+    // Get time-domain waveform (unsigned bytes, 128 = zero crossing)
+    analyser.getByteTimeDomainData(dataArray);
 
-    // Compute features
-    var currentEnergy = computeFrameEnergy(freqArray, startBin, endBin);
-    var onsetRatio = currentEnergy / (prevFrameEnergy + BC_ENERGY_EPSILON);
-    var centroid = computeSpectralCentroid(freqArray, startBin, endBin, binHz);
-    var hfRatio = computeHFEnergyRatio(freqArray, hfBin, endBin, currentEnergy);
-    var flatness = computeSpectralFlatness(freqArray, startBin, endBin);
+    // Compute peak absolute amplitude in this frame (0.0 to 1.0)
+    var maxAmp = 0;
+    for (var i = 0; i < dataArray.length; i++) {
+      var amp = Math.abs(dataArray[i] - 128);
+      if (amp > maxAmp) maxAmp = amp;
+    }
+    var framePeak = maxAmp / 128.0;
 
-    // Update mic level bar: show onset ratio relative to threshold
-    var onsetThreshold = getOnsetThreshold();
-    var barLevel = Math.min(100, (onsetRatio / (onsetThreshold * 2)) * 100);
+    // Update rolling average (slow decay, ~380ms half-life at 60fps)
+    peakAvg = BC_PEAK_SMOOTHING * peakAvg + (1 - BC_PEAK_SMOOTHING) * framePeak;
+
+    // Spike ratio: how much does this frame's peak exceed the average?
+    var spikeRatio = framePeak / (peakAvg + BC_EPSILON);
+
+    // Update mic level bar
+    var threshold = getSpikeThreshold();
+    var barLevel = Math.min(100, (spikeRatio / (threshold * 2)) * 100);
     micLevelFill.style.width = barLevel + "%";
 
     // Update debug overlay
-    updateDebugOverlay(onsetRatio, centroid, hfRatio, flatness);
+    updateDebugOverlay(spikeRatio, framePeak, peakAvg, threshold);
 
-    // =================================================================
-    // PHASE 2: Spectral Collection (50ms after onset trigger)
-    // Onset fires 1-2 frames BEFORE spectrum fully resolves bat-crack
-    // pattern, so we collect peak spectral values over a short window.
-    // =================================================================
-    if (candidateInfo !== null && candidateInfo.phase === "spectral") {
-      var spectralElapsed = now - candidateInfo.time;
-
-      // Track peak energy during spectral window too
-      if (currentEnergy > candidateInfo.peakEnergy) {
-        candidateInfo.peakEnergy = currentEnergy;
-      }
-
-      // Track peak spectral values (these rise over 1-3 frames after onset)
-      if (centroid > candidateInfo.peakCentroid) candidateInfo.peakCentroid = centroid;
-      if (hfRatio > candidateInfo.peakHfRatio) candidateInfo.peakHfRatio = hfRatio;
-      if (flatness > candidateInfo.peakFlatness) candidateInfo.peakFlatness = flatness;
-
-      if (spectralElapsed >= BC_SPECTRAL_WINDOW_MS) {
-        // Spectral collection complete ‚Äî check if features pass
-        var specPassed = true;
-        var specReasons = [];
-
-        if (candidateInfo.peakCentroid < BC_CENTROID_MIN_HZ) {
-          specPassed = false;
-          specReasons.push("centroid=" + candidateInfo.peakCentroid.toFixed(0) + "<" + BC_CENTROID_MIN_HZ);
-        }
-        if (candidateInfo.peakHfRatio < BC_HF_ENERGY_RATIO_MIN) {
-          specPassed = false;
-          specReasons.push("hf=" + (candidateInfo.peakHfRatio * 100).toFixed(1) + "%<" + (BC_HF_ENERGY_RATIO_MIN * 100) + "%");
-        }
-        if (candidateInfo.peakFlatness < BC_FLATNESS_MIN) {
-          specPassed = false;
-          specReasons.push("flat=" + candidateInfo.peakFlatness.toFixed(3) + "<" + BC_FLATNESS_MIN);
-        }
-
-        if (specPassed) {
-          // Spectral features confirmed ‚Äî move to decay verification
-          console.log("[BatCrack] SPECTRAL PASS centroid=" + candidateInfo.peakCentroid.toFixed(0) +
-            "Hz hf=" + (candidateInfo.peakHfRatio * 100).toFixed(1) +
-            "% flat=" + candidateInfo.peakFlatness.toFixed(3) +
-            " peakE=" + candidateInfo.peakEnergy.toFixed(0));
-          candidateInfo.phase = "decay";
-          candidateInfo.decayStart = now;
-          setDebugResult("verifying", "Verifying decay...");
-        } else {
-          // Spectral features failed ‚Äî reject
-          console.log("[BatCrack] REJECTED (spectral) " + specReasons.join(", "));
-          setDebugResult("rejected", "REJECTED: " + specReasons.join(", "));
-          candidateInfo = null;
-        }
-      }
-
-      prevFrameEnergy = currentEnergy;
-      animFrameId = requestAnimationFrame(listenLoop);
+    // Detection: spike ratio exceeds threshold AND peak is above noise floor
+    if (spikeRatio >= threshold && framePeak >= BC_MIN_PEAK) {
+      console.log("[BatCrack] DETECTED spike=" + spikeRatio.toFixed(1) +
+        "x peak=" + framePeak.toFixed(4) +
+        " avg=" + peakAvg.toFixed(4) +
+        " thresh=" + threshold.toFixed(1) + "x");
+      setDebugResult("accepted", "HIT! spike=" + spikeRatio.toFixed(1) + "x");
+      debounceUntil = now + BC_COOLDOWN_MS;
+      peakAvg = framePeak;  // reset average to current level
+      startTimer();
       return;
     }
 
-    // =================================================================
-    // PHASE 3: Decay Verification (200ms after spectral phase ends)
-    // A bat crack is an impulse ‚Äî energy drops quickly. Voice is sustained.
-    // =================================================================
-    if (candidateInfo !== null && candidateInfo.phase === "decay") {
-      // Keep tracking peak energy (it may still rise briefly)
-      if (currentEnergy > candidateInfo.peakEnergy) {
-        candidateInfo.peakEnergy = currentEnergy;
-      }
-
-      var decayElapsed = now - candidateInfo.decayStart;
-      if (decayElapsed >= BC_DECAY_WINDOW_MS) {
-        var decayRatio = currentEnergy / (candidateInfo.peakEnergy + BC_ENERGY_EPSILON);
-        if (decayRatio < BC_DECAY_RATIO) {
-          // CONFIRMED: impulse decayed quickly = bat crack
-          console.log("[BatCrack] CONFIRMED - decayed to " +
-            (decayRatio * 100).toFixed(1) + "% within " + decayElapsed.toFixed(0) + "ms" +
-            " (onset=" + candidateInfo.onsetRatio.toFixed(1) +
-            " centroid=" + candidateInfo.peakCentroid.toFixed(0) +
-            "Hz hf=" + (candidateInfo.peakHfRatio * 100).toFixed(1) +
-            "% flat=" + candidateInfo.peakFlatness.toFixed(3) + ")");
-          setDebugResult("accepted", "CONFIRMED: decay=" + (decayRatio * 100).toFixed(1) + "%");
-          candidateInfo = null;
-          debounceUntil = now + BC_COOLDOWN_MS;
-          prevFrameEnergy = currentEnergy;
-          startTimer();
-          return;
-        } else {
-          // REJECTED: sustained energy = voice or noise
-          console.log("[BatCrack] REJECTED - sustained energy " +
-            (decayRatio * 100).toFixed(1) + "% after " + decayElapsed.toFixed(0) + "ms");
-          setDebugResult("rejected", "REJECTED: sustained=" + (decayRatio * 100).toFixed(1) + "%");
-          candidateInfo = null;
-        }
-      }
-
-      prevFrameEnergy = currentEnergy;
-      animFrameId = requestAnimationFrame(listenLoop);
-      return;
-    }
-
-    // =================================================================
-    // PHASE 1: Onset Detection
-    // Only checks energy jump (onset ratio). Spectral features are checked
-    // in Phase 2 because they peak 1-2 frames AFTER the onset frame.
-    // =================================================================
-    if (onsetRatio >= onsetThreshold) {
-      console.log("[BatCrack] ONSET onset=" + onsetRatio.toFixed(1) +
-        " (threshold=" + onsetThreshold.toFixed(1) + ")" +
-        " centroid=" + centroid.toFixed(0) + "Hz" +
-        " hf=" + (hfRatio * 100).toFixed(1) + "%" +
-        " flat=" + flatness.toFixed(3) +
-        " E=" + currentEnergy.toFixed(0));
-      candidateInfo = {
-        phase: "spectral",
-        time: now,
-        onsetRatio: onsetRatio,
-        peakEnergy: currentEnergy,
-        peakCentroid: centroid,
-        peakHfRatio: hfRatio,
-        peakFlatness: flatness,
-        decayStart: 0
-      };
-      setDebugResult("verifying", "Onset detected, collecting spectrum...");
-    }
-
-    prevFrameEnergy = currentEnergy;
     animFrameId = requestAnimationFrame(listenLoop);
   }
 
@@ -1259,12 +1100,12 @@
     }
   });
 
-  function updateDebugOverlay(onset, centroid, hfRatio, flatness) {
+  function updateDebugOverlay(spikeRatio, framePeak, avg, threshold) {
     if (!debugVisible) return;
-    document.getElementById("dbgOnset").textContent = onset.toFixed(1) + "x";
-    document.getElementById("dbgCentroid").textContent = centroid.toFixed(0) + " Hz";
-    document.getElementById("dbgHfRatio").textContent = (hfRatio * 100).toFixed(1) + "%";
-    document.getElementById("dbgFlatness").textContent = flatness.toFixed(3);
+    document.getElementById("dbgOnset").textContent = spikeRatio.toFixed(1) + "x";
+    document.getElementById("dbgCentroid").textContent = framePeak.toFixed(4);
+    document.getElementById("dbgHfRatio").textContent = avg.toFixed(4);
+    document.getElementById("dbgFlatness").textContent = threshold.toFixed(1) + "x";
   }
 
   function setDebugResult(status, msg) {
