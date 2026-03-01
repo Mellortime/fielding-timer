@@ -837,23 +837,28 @@
     // Update rolling average (slow decay, ~380ms half-life at 60fps)
     peakAvg = BC_PEAK_SMOOTHING * peakAvg + (1 - BC_PEAK_SMOOTHING) * framePeak;
 
+    // Spike ratio: how much does this frame's peak exceed the average?
+    var spikeRatio = framePeak / (peakAvg + BC_EPSILON);
+    var threshold = getSpikeThreshold();
+
+    // Always update debug overlay (even during warmup) so values are visible
+    updateDebugOverlay(spikeRatio, framePeak, peakAvg, threshold);
+
     // Warmup: let rolling average stabilize before detecting (~500ms)
     // Prevents false trigger from first sound after drill starts.
     if (bcWarmupCount < BC_WARMUP_FRAMES) {
       bcWarmupCount++;
       micLevelFill.style.width = "0%";
+      if (debugVisible) {
+        setDebugResult("", "WARMUP " + bcWarmupCount + "/" + BC_WARMUP_FRAMES);
+      }
       animFrameId = requestAnimationFrame(listenLoop);
       return;
     }
 
-    // Spike ratio: how much does this frame's peak exceed the average?
-    var spikeRatio = framePeak / (peakAvg + BC_EPSILON);
-
-    // Update mic level bar and debug (even during cooldown for feedback)
-    var threshold = getSpikeThreshold();
+    // Update mic level bar
     var barLevel = Math.min(100, (spikeRatio / (threshold * 2)) * 100);
     micLevelFill.style.width = barLevel + "%";
-    updateDebugOverlay(spikeRatio, framePeak, peakAvg, threshold);
 
     // During cooldown, keep updating visuals but skip detection
     if (inCooldown) {
