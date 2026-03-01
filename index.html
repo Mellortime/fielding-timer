@@ -484,8 +484,9 @@
   var BC_PEAK_SMOOTHING = 0.97;         // rolling avg decay (higher = slower, ~380ms half-life at 60fps)
   var BC_MIN_PEAK = 0.05;              // minimum absolute peak amplitude to trigger
   var BC_SPIKE_LOW = 3.0;              // spike ratio at slider=5 (most sensitive)
-  var BC_SPIKE_HIGH = 8.0;             // spike ratio at slider=80 (least sensitive)
+  var BC_SPIKE_HIGH = 10.0;            // spike ratio at slider=80 (least sensitive)
   var BC_COOLDOWN_MS = 1500;            // post-detection cooldown
+  var BC_WARMUP_FRAMES = 30;           // ~500ms at 60fps: let rolling avg stabilize before detecting
   var BC_EPSILON = 0.001;              // prevent division by zero
 
   var timerDuration = 4.0;   // seconds
@@ -684,6 +685,7 @@
         mainButton.className = "main-button stop";
         controlsDiv.classList.add("controls-disabled");
         peakAvg = 0;
+        bcWarmupCount = 0;
         break;
       case State.TIMING:
         statusLabel.textContent = "GO!";
@@ -769,7 +771,8 @@
 
   // --- Listening State ---
   var debounceUntil = 0;
-  var peakAvg = 0;  // rolling average of peak amplitude for bat crack detection
+  var peakAvg = 0;          // rolling average of peak amplitude for bat crack detection
+  var bcWarmupCount = 0;    // frames elapsed since listening started
 
   // --- Bat Crack Detection Helpers ---
   function getSpikeThreshold() {
@@ -817,14 +820,10 @@
 
   function listenLoopBatCrack() {
     var now = performance.now();
+    var inCooldown = (now < debounceUntil);
 
-    // Cooldown check
-    if (now < debounceUntil) {
-      animFrameId = requestAnimationFrame(listenLoop);
-      return;
-    }
-
-    // Get time-domain waveform (unsigned bytes, 128 = zero crossing)
+    // Always read audio and update rolling average (even during cooldown/warmup)
+    // This prevents peakAvg from freezing, which would cause missed detections.
     analyser.getByteTimeDomainData(dataArray);
 
     // Compute peak absolute amplitude in this frame (0.0 to 1.0)
@@ -838,16 +837,29 @@
     // Update rolling average (slow decay, ~380ms half-life at 60fps)
     peakAvg = BC_PEAK_SMOOTHING * peakAvg + (1 - BC_PEAK_SMOOTHING) * framePeak;
 
+    // Warmup: let rolling average stabilize before detecting (~500ms)
+    // Prevents false trigger from first sound after drill starts.
+    if (bcWarmupCount < BC_WARMUP_FRAMES) {
+      bcWarmupCount++;
+      micLevelFill.style.width = "0%";
+      animFrameId = requestAnimationFrame(listenLoop);
+      return;
+    }
+
     // Spike ratio: how much does this frame's peak exceed the average?
     var spikeRatio = framePeak / (peakAvg + BC_EPSILON);
 
-    // Update mic level bar
+    // Update mic level bar and debug (even during cooldown for feedback)
     var threshold = getSpikeThreshold();
     var barLevel = Math.min(100, (spikeRatio / (threshold * 2)) * 100);
     micLevelFill.style.width = barLevel + "%";
-
-    // Update debug overlay
     updateDebugOverlay(spikeRatio, framePeak, peakAvg, threshold);
+
+    // During cooldown, keep updating visuals but skip detection
+    if (inCooldown) {
+      animFrameId = requestAnimationFrame(listenLoop);
+      return;
+    }
 
     // Detection: spike ratio exceeds threshold AND peak is above noise floor
     if (spikeRatio >= threshold && framePeak >= BC_MIN_PEAK) {
@@ -857,7 +869,6 @@
         " thresh=" + threshold.toFixed(1) + "x");
       setDebugResult("accepted", "HIT! spike=" + spikeRatio.toFixed(1) + "x");
       debounceUntil = now + BC_COOLDOWN_MS;
-      peakAvg = framePeak;  // reset average to current level
       startTimer();
       return;
     }
