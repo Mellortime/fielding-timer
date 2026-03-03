@@ -400,7 +400,7 @@
     <div class="debug-line"><span class="debug-label">Spike</span><span id="dbgOnset">-</span></div>
     <div class="debug-line"><span class="debug-label">Peak</span><span id="dbgCentroid">-</span></div>
     <div class="debug-line"><span class="debug-label">Avg</span><span id="dbgHfRatio">-</span></div>
-    <div class="debug-line"><span class="debug-label">Thresh</span><span id="dbgFlatness">-</span></div>
+    <div class="debug-line"><span class="debug-label">Thr/Gate</span><span id="dbgFlatness">-</span></div>
     <div class="debug-line debug-result" id="dbgResult">Triple-tap to close</div>
   </div>
 </div>
@@ -477,14 +477,23 @@
   var currentState = State.IDLE;
 
   // --- Bat Crack Detection Constants (tune these in the field) ---
-  // Uses time-domain peak spike detection ‚Äî works in reverberant indoor spaces
-  // where spectral features are unreliable.
+  // Dual-gate detection: triggers on EITHER spike ratio (quiet) OR absolute peak (noisy).
+  // This handles both quiet environments (spike ratio works great) and noisy/talking
+  // environments (where voice raises the rolling average, compressing spike ratios).
   var BC_FFT_SIZE = 2048;               // time-domain buffer size (~42ms at 48kHz)
   var BC_SMOOTHING = 0.1;               // analyser smoothing (for any future freq use)
   var BC_PEAK_SMOOTHING = 0.97;         // rolling avg decay (higher = slower, ~380ms half-life at 60fps)
-  var BC_MIN_PEAK = 0.05;              // minimum absolute peak amplitude to trigger
+
+  // Gate 1: Spike ratio detection (works in quiet environments)
+  var BC_MIN_PEAK = 0.13;              // minimum peak for spike-ratio path (blocks voice at 0.06-0.12)
   var BC_SPIKE_LOW = 3.0;              // spike ratio at slider=5 (most sensitive)
   var BC_SPIKE_HIGH = 10.0;            // spike ratio at slider=80 (least sensitive)
+
+  // Gate 2: Absolute peak detection (works in noisy/talking environments)
+  var BC_PEAK_GATE_LOW = 0.08;         // peak gate at slider=5 (most sensitive)
+  var BC_PEAK_GATE_HIGH = 0.25;        // peak gate at slider=80 (least sensitive)
+  var BC_SPIKE_FLOOR = 1.5;            // minimum spike for peak-gate path (blocks sustained noise)
+
   var BC_COOLDOWN_MS = 1500;            // post-detection cooldown
   var BC_WARMUP_FRAMES = 30;           // ~500ms at 60fps: let rolling avg stabilize before detecting
   var BC_EPSILON = 0.001;              // prevent division by zero
@@ -779,6 +788,10 @@
     // Map sensitivity slider (5-80) to spike ratio threshold
     return BC_SPIKE_LOW + (sensitivity - 5) * (BC_SPIKE_HIGH - BC_SPIKE_LOW) / 75;
   }
+  function getPeakGate() {
+    // Map sensitivity slider (5-80) to absolute peak gate threshold
+    return BC_PEAK_GATE_LOW + (sensitivity - 5) * (BC_PEAK_GATE_HIGH - BC_PEAK_GATE_LOW) / 75;
+  }
 
   // --- Listen Loop: Dispatcher ---
   function listenLoop() {
@@ -840,9 +853,10 @@
     // Spike ratio: how much does this frame's peak exceed the average?
     var spikeRatio = framePeak / (peakAvg + BC_EPSILON);
     var threshold = getSpikeThreshold();
+    var peakGate = getPeakGate();
 
     // Always update debug overlay (even during warmup) so values are visible
-    updateDebugOverlay(spikeRatio, framePeak, peakAvg, threshold);
+    updateDebugOverlay(spikeRatio, framePeak, peakAvg, threshold, peakGate);
 
     // Warmup: let rolling average stabilize before detecting (~500ms)
     // Prevents false trigger from first sound after drill starts.
@@ -856,8 +870,8 @@
       return;
     }
 
-    // Update mic level bar
-    var barLevel = Math.min(100, (spikeRatio / (threshold * 2)) * 100);
+    // Update mic level bar ‚Äî show peak relative to peak gate for visual feedback
+    var barLevel = Math.min(100, (framePeak / (peakGate * 1.5)) * 100);
     micLevelFill.style.width = barLevel + "%";
 
     // During cooldown, keep updating visuals but skip detection
@@ -866,13 +880,22 @@
       return;
     }
 
-    // Detection: spike ratio exceeds threshold AND peak is above noise floor
-    if (spikeRatio >= threshold && framePeak >= BC_MIN_PEAK) {
-      console.log("[BatCrack] DETECTED spike=" + spikeRatio.toFixed(1) +
+    // Dual-gate detection:
+    // Gate 1 (spike): high spike ratio + minimum peak ‚Äî works in quiet environments
+    // Gate 2 (peak):  high absolute peak + minimum spike ‚Äî works in noisy/talking environments
+    var spikeHit = (spikeRatio >= threshold && framePeak >= BC_MIN_PEAK);
+    var peakHit = (framePeak >= peakGate && spikeRatio >= BC_SPIKE_FLOOR);
+
+    if (spikeHit || peakHit) {
+      var hitType = spikeHit ? "spike" : "peak";
+      console.log("[BatCrack] DETECTED via " + hitType +
+        " spike=" + spikeRatio.toFixed(1) +
         "x peak=" + framePeak.toFixed(4) +
         " avg=" + peakAvg.toFixed(4) +
-        " thresh=" + threshold.toFixed(1) + "x");
-      setDebugResult("accepted", "HIT! spike=" + spikeRatio.toFixed(1) + "x");
+        " spikeThresh=" + threshold.toFixed(1) + "x" +
+        " peakGate=" + peakGate.toFixed(3));
+      setDebugResult("accepted", "HIT! " + hitType + "=" +
+        (spikeHit ? spikeRatio.toFixed(1) + "x" : framePeak.toFixed(3)));
       debounceUntil = now + BC_COOLDOWN_MS;
       startTimer();
       return;
@@ -1116,12 +1139,12 @@
     }
   });
 
-  function updateDebugOverlay(spikeRatio, framePeak, avg, threshold) {
+  function updateDebugOverlay(spikeRatio, framePeak, avg, threshold, peakGate) {
     if (!debugVisible) return;
     document.getElementById("dbgOnset").textContent = spikeRatio.toFixed(1) + "x";
     document.getElementById("dbgCentroid").textContent = framePeak.toFixed(4);
     document.getElementById("dbgHfRatio").textContent = avg.toFixed(4);
-    document.getElementById("dbgFlatness").textContent = threshold.toFixed(1) + "x";
+    document.getElementById("dbgFlatness").textContent = threshold.toFixed(1) + "x / " + peakGate.toFixed(3);
   }
 
   function setDebugResult(status, msg) {
